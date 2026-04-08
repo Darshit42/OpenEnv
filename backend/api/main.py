@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # Allow imports from backend/
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -111,7 +111,7 @@ async def list_tasks():
 
 
 @app.post("/reset", response_model=ResetResponse, tags=["Environment"])
-async def reset(req: ResetRequest):
+async def reset(req: Optional[Dict[str, Any]] = None):
     """
     Start a new episode for the specified task and seed.
     Runs the PC causal DAG algorithm and returns the initial Observation.
@@ -119,7 +119,11 @@ async def reset(req: ResetRequest):
     try:
         global cf_called_state
         cf_called_state = False
-        obs = _env.reset(task_id=req.task_id, seed=req.seed)
+        
+        task_id = req.get("task_id", 1) if req else 1
+        seed = req.get("seed", 42) if req else 42
+        
+        obs = _env.reset(task_id=task_id, seed=seed)
         return ResetResponse(
             observation=obs.model_dump(),
             reward=0.0,
@@ -134,28 +138,25 @@ async def reset(req: ResetRequest):
 
 
 @app.post("/step", response_model=StepResponse, tags=["Environment"])
-async def step(req: StepRequest):
+async def step(req: Optional[Dict[str, Any]] = None):
     """
     Submit an action. Returns (Observation, Reward, done, info).
-
-    Action types:
-      - restart_service(service_id)
-      - scale_service(service_id, replicas)
-      - run_diagnostic(service_id, command)
-      - silence_alert(alert_id)
-      - query_counterfactual(service_id)
-      - escalate_incident(severity)
-      - declare_resolution()
     """
     try:
+        req_dict = req or {}
+        action_type = req_dict.get("action_type", "query_counterfactual")
+        service_id = req_dict.get("service_id", "api-gateway")
+        parameters = req_dict.get("parameters", None)
+
         action = Action(
-            action_type=req.action_type,
-            service_id=req.service_id,
-            parameters=req.parameters,
+            action_type=action_type,
+            service_id=service_id,
+            parameters=parameters,
         )
         global cf_called_state
-        if req.action_type == "query_counterfactual":
+        if action_type == "query_counterfactual":
             cf_called_state = True
+            
         obs, reward, done, info = _env.step(action)
         return StepResponse(
             observation=obs.model_dump(),
