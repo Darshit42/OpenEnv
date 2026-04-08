@@ -40,4 +40,4 @@ Repository = "https://huggingface.co/spaces/Mandalorian777/OpenENV_SRE"
 where = ["backend"]
 
 [project.scripts]
-server = "backend.main:app"
+server = "server.app:main"
