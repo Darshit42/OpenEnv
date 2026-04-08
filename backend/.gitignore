@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.env.*
+!.env.example
+.venv
+venv/
+env/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+models/saved/*.pkl
+models/saved/*.pt

@@ -1,0 +1,112 @@
+name: openenv-sre-causal
+version: "1.0.0"
+description: >
+  Causal SRE Intelligence — An RL environment for SRE incident diagnosis and autonomous response.
+  Features a five-stage ML pipeline with causal DAG discovery (PC algorithm), counterfactual
+  action pre-screening, SHAP explainability, and shaped five-term reward function.
+
+entry_point: "backend.openenv.environment:OpenEnvSRE"
+
+tasks:
+  - id: 1
+    name: "memory_leak_basic"
+    description: >
+      One service exhibits a classic memory leak. RSS grows monotonically across ~20 steps.
+      Root cause is unambiguous. Causal DAG shows the leaking service as an origin node.
+    max_steps: 30
+    score_weight: 0.20
+
+  - id: 2
+    name: "cascading_failure"
+    description: >
+      Downstream data-layer times out, cascading to upstream services.
+      api-gateway has a higher anomaly score than data-layer (the naive agent trap).
+      Drift begins at step 0, threshold breach at step 18. One red-herring alert.
+    max_steps: 45
+    score_weight: 0.35
+
+  - id: 3
+    name: "latency_spike_chain"
+    description: >
+      Config drift propagates silently across five services for 18 steps before any alert fires.
+      Cache restart causes a severe write-loss cascade (lethal counterfactual trap).
+      Two high-severity misleading alerts. Correct action: patch config on origin-service.
+    max_steps: 60
+    score_weight: 0.45
+
+reward:
+  formula: "R(t) = alpha*correctness + beta*speed_bonus + gamma*partial_credit + delta*counterfactual_bonus - epsilon*harm_penalty"
+  coefficients:
+    alpha: 0.50   # correctness — dominant term
+    beta: 0.20    # speed bonus — linear decay from optimal step to 2x optimal
+    gamma: 0.15   # partial credit — correct diagnosis, suboptimal action
+    delta: 0.10   # counterfactual bonus — used query_counterfactual before acting
+    epsilon_min: 0.05   # harm penalty (wrong service restart)
+    epsilon_max: 0.40   # harm penalty (database/cache restart causing data loss)
+
+observation:
+  type: pydantic
+  model: "backend.openenv.models:Observation"
+  fields:
+    - raw_logs
+    - metrics
+    - alerts
+    - anomaly_scores
+    - anomaly_flags
+    - causal_dag
+    - causal_effects
+    - counterfactual_result
+    - root_cause_prediction
+    - root_cause_probabilities
+    - shap_top5
+    - forecast
+    - drift_alert
+    - step_number
+
+action:
+  type: pydantic
+  model: "backend.openenv.models:Action"
+  action_types:
+    - restart_service
+    - scale_service
+    - run_diagnostic
+    - silence_alert
+    - query_counterfactual
+    - escalate_incident
+    - declare_resolution
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  endpoints:
+    reset: "POST /reset"
+    step: "POST /step"
+    state: "GET /state"
+    health: "GET /health"
+    tasks: "GET /tasks"
+
+pipeline:
+  stages:
+    - name: "Feature Engineering"
+      description: "Rolling windows (1/5/15 min), lag features, TF-IDF log embeddings, cross-service correlation, Mann-Kendall trend test"
+    - name: "Anomaly Detection"
+      model: "IsolationForest"
+      output: "per-service anomaly score [0,1] + anomaly_flag"
+    - name: "Causal Discovery"
+      algorithm: "PC (Peter-Clark)"
+      library: "causal-learn"
+      max_cond_vars: 5
+      output: "directed acyclic graph (adjacency list) + linear SEM for counterfactuals"
+    - name: "Root Cause Classification"
+      model: "XGBoostClassifier"
+      explainability: "SHAP TreeExplainer (top-5 features)"
+      classes:
+        - memory_leak
+        - latency_spike
+        - cascading_failure
+        - config_drift
+        - dependency_timeout
+        - false_alarm
+    - name: "Temporal Forecasting"
+      model: "LSTM Autoencoder + Linear Trend Extrapolation"
+      output: "forecast_t5, forecast_t15, drift_alert, confidence_band_width"
