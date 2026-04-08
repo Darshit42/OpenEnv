@@ -1,3 +1,13 @@
+---
+title: OpenEnv SRE
+emoji: 🚀
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+app_port: 7860
+---
+
 # OpenEnv: Causal SRE Intelligence
 
 OpenEnv is a production-grade, reinforcement learning (RL) simulation platform designed for advanced Site Reliability Engineering (SRE) research and autonomous incident response. It models complex microservice architectures, injects realistic anomalies, and evaluates agent performance (LLMs or classical algorithms) based on correctness, speed, and system harm.
