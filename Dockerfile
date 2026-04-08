@@ -42,11 +42,17 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy source + pre-trained models
 COPY --from=builder /app/backend /app/backend
 
-# Copy frontend (served as static files via FastAPI StaticFiles or separate)
+# Copy frontend (served as static files via FastAPI StaticFiles)
 COPY frontend/ /app/frontend/
 
+# Copy root-level project files required by validator
+COPY inference.py /app/inference.py
+COPY openenv.yaml /app/openenv.yaml
+COPY pyproject.toml /app/pyproject.toml
+COPY server/ /app/server/
+
 # Environment
-ENV PYTHONPATH=/app/backend
+ENV PYTHONPATH=/app:/app/backend
 ENV PYTHONUNBUFFERED=1
 ENV RANDOM_SEED=42
 ENV OMP_NUM_THREADS=1
@@ -57,9 +63,9 @@ ENV NUMEXPR_NUM_THREADS=1
 # Expose API port
 EXPOSE 7860
 
-# Health check
+# Health check — must match the port we serve on
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/health').read()"
 
 # Start FastAPI server
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]
