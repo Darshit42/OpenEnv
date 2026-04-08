@@ -14,6 +14,7 @@ authors = [
 ]
 
 dependencies = [
+    "openenv>=0.1.0",
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.29.0",
     "pydantic>=2.7.0",
@@ -39,4 +40,4 @@ Repository = "https://huggingface.co/spaces/Mandalorian777/OpenENV_SRE"
 where = ["backend"]
 
 [project.scripts]
-openenv-serve = "backend.main:app"
+server = "backend.main:app"
