@@ -55,11 +55,11 @@ ENV MKL_NUM_THREADS=1
 ENV NUMEXPR_NUM_THREADS=1
 
 # Expose API port
-EXPOSE 8000
+EXPOSE 7860
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"
 
 # Start FastAPI server
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]

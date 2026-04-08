@@ -80,6 +80,7 @@ class StepRequest(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ResetResponse(BaseModel):
+    status: str = "reset successful"
     observation: Dict[str, Any]
     task_id: int
     seed: Optional[int]
