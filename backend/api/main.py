@@ -18,7 +18,7 @@ from typing import List, Dict, Any, Optional
 # Allow imports from backend/
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.schemas import (
@@ -111,17 +111,22 @@ async def list_tasks():
 
 
 @app.post("/reset", response_model=ResetResponse, tags=["Environment"])
-async def reset(req: Optional[Dict[str, Any]] = None):
+async def reset(request: Request):
     """
     Start a new episode for the specified task and seed.
     Runs the PC causal DAG algorithm and returns the initial Observation.
     """
     try:
+        try:
+            body = await request.json()
+        except BaseException:
+            body = {}
+            
         global cf_called_state
         cf_called_state = False
         
-        task_id = req.get("task_id", 1) if req else 1
-        seed = req.get("seed", 42) if req else 42
+        task_id = body.get("task_id", 1)
+        seed = body.get("seed", 42)
         
         obs = _env.reset(task_id=task_id, seed=seed)
         return ResetResponse(
@@ -138,15 +143,19 @@ async def reset(req: Optional[Dict[str, Any]] = None):
 
 
 @app.post("/step", response_model=StepResponse, tags=["Environment"])
-async def step(req: Optional[Dict[str, Any]] = None):
+async def step(request: Request):
     """
     Submit an action. Returns (Observation, Reward, done, info).
     """
     try:
-        req_dict = req or {}
-        action_type = req_dict.get("action_type", "query_counterfactual")
-        service_id = req_dict.get("service_id", "api-gateway")
-        parameters = req_dict.get("parameters", None)
+        try:
+            body = await request.json()
+        except BaseException:
+            body = {}
+
+        action_type = body.get("action_type", "query_counterfactual")
+        service_id = body.get("service_id", "api-gateway")
+        parameters = body.get("parameters", None)
 
         action = Action(
             action_type=action_type,
