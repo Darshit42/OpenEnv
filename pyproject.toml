@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "openenv-sre"
+version = "1.0.0"
+description = "Causal SRE Intelligence — An RL environment for SRE incident diagnosis and autonomous response"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "OpenEnv Team"},
+]
+
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.7.0",
+    "python-dotenv>=1.0.0",
+    "numpy>=1.26.0",
+    "pandas>=2.2.0",
+    "scipy>=1.13.0",
+    "scikit-learn>=1.4.0",
+    "joblib>=1.4.0",
+    "xgboost>=2.0.0",
+    "shap>=0.45.0",
+    "causal-learn>=0.1.3.8",
+    "torch>=2.3.0",
+    "statsmodels>=0.14.0",
+    "requests>=2.31.0",
+]
+
+[project.urls]
+Homepage = "https://huggingface.co/spaces/Mandalorian777/OpenENV_SRE"
+Repository = "https://huggingface.co/spaces/Mandalorian777/OpenENV_SRE"
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+
+[project.scripts]
+openenv-serve = "backend.main:app"
