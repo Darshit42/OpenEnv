@@ -80,16 +80,15 @@ class StepRequest(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ResetResponse(BaseModel):
-    status: str = "reset successful"
     observation: Dict[str, Any]
-    task_id: int
-    seed: Optional[int]
-    message: str
+    reward: float = 0.0
+    done: bool = False
+    info: Dict[str, Any] = Field(default_factory=dict)
 
 
 class StepResponse(BaseModel):
     observation: Dict[str, Any]
-    reward: Dict[str, Any]
+    reward: float
     done: bool
     info: Dict[str, Any]
 

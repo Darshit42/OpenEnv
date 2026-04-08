@@ -122,9 +122,9 @@ async def reset(req: ResetRequest):
         obs = _env.reset(task_id=req.task_id, seed=req.seed)
         return ResetResponse(
             observation=obs.model_dump(),
-            task_id=req.task_id,
-            seed=req.seed,
-            message=f"Episode started — Task {req.task_id} (seed={req.seed})",
+            reward=0.0,
+            done=False,
+            info={}
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -159,9 +159,9 @@ async def step(req: StepRequest):
         obs, reward, done, info = _env.step(action)
         return StepResponse(
             observation=obs.model_dump(),
-            reward=reward.model_dump(),
-            done=done,
-            info=info,
+            reward=float(getattr(reward, "total_score", 0.0)),
+            done=bool(done),
+            info=dict(info) if info else {}
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
