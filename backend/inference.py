@@ -60,7 +60,6 @@ except ImportError:
     _llm_client = None
     logger.warning("openai package not installed; using heuristic fallback policy")
 except TypeError as e:
-    # Handles httpx incompatibility: "Client.__init__() got unexpected keyword 'proxies'"
     _LLM_OK = False
     _llm_client = None
     logger.warning("OpenAI client init failed (likely httpx version conflict: %s); using heuristic fallback", e)
@@ -101,24 +100,115 @@ Respond only with a valid JSON action:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LLM Policy / Heuristic Fallback
+# Heuristic fallback policy (no LLM available)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# (Removed old inline functions in favour of openenv.agent)
+def heuristic_policy(obs: Dict[str, Any], step: int, cf_called: bool) -> Dict[str, Any]:
+    """Simple rule-based fallback policy for when LLM is unavailable."""
+    services = obs.get("services", [])
+    alerts = obs.get("alerts", [])
+    anomaly_scores = obs.get("anomaly_scores", {})
+    causal_dag = obs.get("causal_dag", {})
+    cf_result = obs.get("counterfactual_result")
+
+    # 1. Silence red-herring alerts first
+    for alert in alerts:
+        if alert.get("is_red_herring") and not alert.get("silenced"):
+            return {
+                "action_type": "silence_alert",
+                "service_id": None,
+                "parameters": {"alert_id": alert["alert_id"]},
+            }
+
+    # 2. Query counterfactual before acting if not yet called
+    if not cf_called and services:
+        root_candidates = [s for s in services if not causal_dag.get(s, [])]
+        target = root_candidates[0] if root_candidates else max(services, key=lambda s: anomaly_scores.get(s, 0))
+        return {
+            "action_type": "query_counterfactual",
+            "service_id": target,
+            "parameters": None,
+        }
+
+    # 3. Check counterfactual result — don't act if harm_flag
+    if cf_result and cf_result.get("harm_flag"):
+        safe_services = [s for s in services if s != cf_result.get("service_id")]
+        if safe_services:
+            return {
+                "action_type": "run_diagnostic",
+                "service_id": safe_services[0],
+                "parameters": {"command": "check_config"},
+            }
+
+    # 4. Act on the causal root node with highest anomaly score
+    root_nodes = [s for s in services if not causal_dag.get(s, [])]
+    if root_nodes:
+        target = max(root_nodes, key=lambda s: anomaly_scores.get(s, 0))
+        return {
+            "action_type": "restart_service",
+            "service_id": target,
+            "parameters": None,
+        }
+
+    # 5. Declare resolution if step is advanced enough
+    if step >= 20:
+        return {"action_type": "declare_resolution", "service_id": None, "parameters": None}
+
+    # 6. Fallback: diagnostic on most anomalous service
+    if services:
+        target = max(services, key=lambda s: anomaly_scores.get(s, 0))
+        return {"action_type": "run_diagnostic", "service_id": target, "parameters": {"command": "status"}}
+
+    return {"action_type": "declare_resolution", "service_id": None, "parameters": None}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM policy
+# ─────────────────────────────────────────────────────────────────────────────
+
+def llm_policy(obs: Dict[str, Any]) -> Dict[str, Any]:
+    """Call LLM with observation. Returns parsed action dict."""
+    if not _LLM_OK:
+        raise RuntimeError("LLM client not available")
+
+    obs_compact = {k: v for k, v in obs.items() if k != "raw_logs"}
+    user_msg = f"Current observation:\n{json.dumps(obs_compact, indent=2, default=str)}"
+
+    try:
+        response = _llm_client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.1,
+            max_tokens=256,
+        )
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return json.loads(raw)
+    except Exception as e:
+        logger.warning("LLM call failed: %s — falling back to heuristic", e)
+        raise
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Episode runner
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _clamp(score: float) -> float:
+    """Clamp score to strictly open interval (0, 1)."""
+    return round(max(0.01, min(0.99, float(score))), 4)
+
+
 def run_episode(env_or_url: Any, task_id: int, seed: int, use_local: bool) -> float:
-    from openenv.agent import HybridSREAgent
-    agent = HybridSREAgent(use_llm=True, model_name=MODEL_NAME)
-    
-    """Run a single episode. Returns the normalised episode score [0, 1]."""
+    """Run a single episode. Returns the normalised episode score in (0, 1) exclusive."""
     cf_called = False
 
     if use_local:
-        # Direct Python API
         obs_obj = env_or_url.reset(task_id=task_id, seed=seed)
         obs = obs_obj.model_dump()
     else:
@@ -131,23 +221,20 @@ def run_episode(env_or_url: Any, task_id: int, seed: int, use_local: bool) -> fl
 
     step = 0
     done = False
-    episode_score = 0.0
+    episode_score = 0.01  # default: strictly > 0
     max_steps = {1: 30, 2: 45, 3: 60}[task_id]
 
     while not done and step < max_steps:
         step += 1
 
-        # Choose action
         try:
-            action_dict = agent.decide_action(obs, step, cf_called)
+            action_dict = llm_policy(obs)
         except Exception:
-            # Absolute worst-case fallback
-            action_dict = {"action_type": "declare_resolution", "service_id": None, "parameters": None}
+            action_dict = heuristic_policy(obs, step, cf_called)
 
         if action_dict.get("action_type") == "query_counterfactual":
             cf_called = True
 
-        # Log the step
         step_payload = {
             "step": step,
             "root_cause_prediction": obs.get("root_cause_prediction", ""),
@@ -157,7 +244,6 @@ def run_episode(env_or_url: Any, task_id: int, seed: int, use_local: bool) -> fl
         }
         print(f"[STEP] {json.dumps(step_payload)}", flush=True)
 
-        # Execute action
         if use_local:
             from openenv.models import Action, ActionType
             action = Action(
@@ -167,20 +253,20 @@ def run_episode(env_or_url: Any, task_id: int, seed: int, use_local: bool) -> fl
             )
             obs_obj, reward_obj, done, info = env_or_url.step(action)
             obs = obs_obj.model_dump()
-            done_flag = done
-            episode_score = info.get("episode_score", 0.0)
         else:
             import requests
             r = requests.post(f"{env_or_url}/step", json=action_dict, timeout=30)
             r.raise_for_status()
             result = r.json()
             obs = result["observation"]
-            done_flag = result["done"]
+            done = result["done"]
             info = result.get("info", {})
-            if done_flag:
-                episode_score = info.get("episode_score", 0.0)
-            done = done_flag
 
+        if done:
+            raw_score = info.get("episode_score", 0.01)
+            episode_score = _clamp(raw_score)
+
+    # If the loop ended without done=True (hit max_steps), keep the default 0.01
     return episode_score
 
 
@@ -201,18 +287,23 @@ def main() -> None:
 
     task_weights = {1: 0.20, 2: 0.35, 3: 0.45}
     total_weighted_score = 0.0
+    task_scores: Dict[int, float] = {}
     start_time = time.time()
 
     for task_id in [1, 2, 3]:
         logger.info("Starting Task %d (seed=%d)", task_id, RANDOM_SEED)
-        task_score = run_episode(env_or_url, task_id, RANDOM_SEED, USE_LOCAL_ENV)
+        task_score = _clamp(run_episode(env_or_url, task_id, RANDOM_SEED, USE_LOCAL_ENV))
+        task_scores[task_id] = task_score
         weighted = task_score * task_weights[task_id]
         total_weighted_score += weighted
         logger.info("Task %d score: %.4f (weighted: %.4f)", task_id, task_score, weighted)
 
     elapsed = time.time() - start_time
-    final = round(total_weighted_score, 4)
-    print(f"[END] {json.dumps({'final_score': final, 'elapsed_seconds': round(elapsed, 1), 'seed': RANDOM_SEED})}", flush=True)
+    final = _clamp(total_weighted_score)
+    print(
+        f"[END] {json.dumps({'final_score': final, 'task_scores': task_scores, 'elapsed_seconds': round(elapsed, 1), 'seed': RANDOM_SEED})}",
+        flush=True,
+    )
     logger.info("All tasks complete. Final score: %.4f in %.1fs", final, elapsed)
 
 
