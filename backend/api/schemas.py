@@ -111,6 +111,8 @@ class TasksResponse(BaseModel):
 
 
 class AgentStepRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
     use_llm: bool = True
     model_name: str = "gpt-4o"
     
