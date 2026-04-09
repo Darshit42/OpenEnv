@@ -20,7 +20,7 @@ class HybridSREAgent:
         try:
             from openai import OpenAI
             base_url = os.environ.get("API_BASE_URL", "http://localhost:8000")
-            api_key = os.environ.get("HF_TOKEN", "na")
+            api_key = os.environ.get("API_KEY", "na")
             # Special case for local deepseek/llama: we just pass a fake api key
             return OpenAI(base_url=base_url, api_key=api_key)
         except Exception as e:
