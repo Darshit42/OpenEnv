@@ -110,13 +110,13 @@ def run_episode(task_id: int, seed: int, agent: IsolatedAgent) -> float:
         obs = result.get("observation", {})
     except Exception as e:
         logger.error(f"Failed to reset environment: {e}")
-        return 0.0
+        return 0.0001
 
     print("[START]", flush=True)
 
     step = 0
     done = False
-    episode_score = 0.0
+    episode_score = 0.0001
     max_steps = {1: 30, 2: 45, 3: 60}.get(task_id, 30)
 
     while not done and step < max_steps:
@@ -147,7 +147,7 @@ def run_episode(task_id: int, seed: int, agent: IsolatedAgent) -> float:
             done = result.get("done", False)
             info = result.get("info", {})
             if done:
-                episode_score = info.get("episode_score", 0.0)
+                episode_score = info.get("episode_score", 0.0001)
         except Exception as e:
             logger.error(f"Environment step failed: {e}")
             break
