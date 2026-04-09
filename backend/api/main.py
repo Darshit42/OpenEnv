@@ -70,6 +70,11 @@ cf_called_state = False
 # Routes
 # ─────────────────────────────────────────────────────────────────────────────
 
+@app.get("/", tags=["System"])
+async def root():
+    """Root endpoint for HF Space health check."""
+    return {"status": "ok"}
+
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health():
     """Liveness probe."""
