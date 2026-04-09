@@ -110,13 +110,13 @@ def run_episode(task_id: int, seed: int, agent: IsolatedAgent) -> float:
         obs = result.get("observation", {})
     except Exception as e:
         logger.error(f"Failed to reset environment: {e}")
-        return 0.0001
+        return 0.01
 
     print("[START]", flush=True)
 
     step = 0
     done = False
-    episode_score = 0.0001
+    episode_score = 0.01
     max_steps = {1: 30, 2: 45, 3: 60}.get(task_id, 30)
 
     while not done and step < max_steps:
@@ -147,7 +147,7 @@ def run_episode(task_id: int, seed: int, agent: IsolatedAgent) -> float:
             done = result.get("done", False)
             info = result.get("info", {})
             if done:
-                episode_score = info.get("episode_score", 0.0001)
+                episode_score = info.get("episode_score", 0.01)
         except Exception as e:
             logger.error(f"Environment step failed: {e}")
             break
@@ -172,12 +172,14 @@ def main() -> None:
     for task_id in [1, 2, 3]:
         logger.info(f"Starting Task {task_id} (seed={random_seed})")
         task_score = run_episode(task_id, random_seed, agent)
+        # Ensure task_score strictly complies with (0, 1) bounds
+        task_score = float(max(0.01, min(0.99, task_score)))
         weighted = task_score * task_weights[task_id]
         total_weighted_score += weighted
         logger.info(f"Task {task_id} score: {task_score:.4f} (weighted: {weighted:.4f})")
 
     elapsed = time.time() - start_time
-    final = round(total_weighted_score, 4)
+    final = round(max(0.01, min(0.99, total_weighted_score)), 4)
     print(f"[END] {json.dumps({'final_score': final, 'elapsed_seconds': round(elapsed, 1), 'seed': random_seed})}", flush=True)
     logger.info(f"All tasks complete. Final score: {final:.4f} in {elapsed:.1f}s")
 
