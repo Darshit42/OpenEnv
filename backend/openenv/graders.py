@@ -24,9 +24,30 @@ class ActionRecord:
 
 @dataclass
 class GradingResult:
-    score: float                          # Normalised [0.0, 1.0]
+    score: float                          # Normalised — strictly in (0.0, 1.0)
     breakdown: Dict[str, float] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # Defensive clamp: score must be strictly between 0 and 1 exclusive.
+        # Use 0.02 / 0.98 as hard bounds so floating-point rounding never
+        # reaches the forbidden endpoints 0.0 or 1.0.
+        self.score = _safe_clamp(self.score)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _safe_clamp(value: float) -> float:
+    """Return value clamped to the open interval (0, 1), strictly exclusive."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        v = 0.05
+    if v != v:          # NaN guard
+        v = 0.05
+    return round(max(0.02, min(0.98, v)), 4)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -98,7 +119,7 @@ class EasyGrader(BaseGrader):
     +0.05  query_counterfactual called before restart (bonus)
     -0.15  Incorrect service restarted (per occurrence, capped at -0.30)
     -0.40  Database restarted
-    Max: 1.05 (capped to 1.0)
+    Max raw: 1.05 → clamped to 0.98
     """
 
     task_id = 1
@@ -123,16 +144,15 @@ class EasyGrader(BaseGrader):
         lethal_service = "database"
 
         # ── 1. Root cause identification (+0.40) ─────────────────────────────
-        # Proxy: agent acted on api-server (restart or diagnostic) within step 10
         early_action = self._find_action_on_service(action_trajectory[:10], "restart_service", correct_service)
-        early_diag = self._find_action_on_service(action_trajectory[:10], "run_diagnostic", correct_service)
+        early_diag   = self._find_action_on_service(action_trajectory[:10], "run_diagnostic",  correct_service)
         identified_early = early_action is not None or early_diag is not None
-        rc_score = 0.40 if identified_early else 0.20  # partial if identified later
-        # Check if identified at all (even after step 10)
         any_action = self._find_action_on_service(action_trajectory, "restart_service", correct_service)
-        if not identified_early and any_action:
+        if identified_early:
+            rc_score = 0.40
+        elif any_action:
             rc_score = 0.20
-        elif not any_action:
+        else:
             rc_score = 0.0
         score += rc_score
         breakdown["root_cause_identification"] = rc_score
@@ -148,8 +168,7 @@ class EasyGrader(BaseGrader):
         # ── 3. Speed bonus (+0.20) ────────────────────────────────────────────
         res_step = self._resolution_step(action_trajectory)
         if res_step is not None:
-            speed = self._speed_bonus(res_step, optimal_step=15, max_step=30)
-            speed_score = 0.20 * speed
+            speed_score = 0.20 * self._speed_bonus(res_step, optimal_step=15, max_step=30)
         else:
             speed_score = 0.0
         score += speed_score
@@ -158,10 +177,7 @@ class EasyGrader(BaseGrader):
 
         # ── 4. No harmful actions (+0.10) ─────────────────────────────────────
         db_restart = self._find_action_on_service(action_trajectory, "restart_service", lethal_service)
-        if db_restart is None:
-            harmless_score = 0.10
-        else:
-            harmless_score = 0.0
+        harmless_score = 0.10 if db_restart is None else 0.0
         score += harmless_score
         breakdown["no_harmful_actions"] = harmless_score
         notes.append(f"No-harm: {harmless_score:.2f}")
@@ -175,7 +191,8 @@ class EasyGrader(BaseGrader):
         # ── Penalties ────────────────────────────────────────────────────────
         wrong_restarts = [
             r for r in action_trajectory
-            if r.action_type == "restart_service" and r.service_id not in (correct_service, None)
+            if r.action_type == "restart_service"
+            and r.service_id not in (correct_service, None)
             and r.service_id != lethal_service
         ]
         wrong_penalty = min(0.30, len(wrong_restarts) * 0.15)
@@ -188,8 +205,7 @@ class EasyGrader(BaseGrader):
         if db_penalty:
             notes.append("PENALTY: Database restarted (-0.40)")
 
-        final_score = round(max(0.01, min(0.99, score)), 4)
-        return GradingResult(score=final_score, breakdown=breakdown, notes=notes)
+        return GradingResult(score=score, breakdown=breakdown, notes=notes)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -204,9 +220,9 @@ class MediumGrader(BaseGrader):
     +0.10  Red-herring alert (background-worker) silenced without action
     +0.10  query_counterfactual used before acting on data-layer
     +0.10  Speed bonus: resolution within 25 steps (linear decay to 45)
-    +0.15  Partial credit: correct service identified, suboptimal action order
-    -0.20  api-gateway restart (per occurrence)
-    Max: 1.05 (capped to 1.0)
+    +0.15  Partial credit: correct service identified after suboptimal action order
+    -0.20  api-gateway restart (per occurrence, capped at -0.40)
+    Max raw: 1.05 → clamped to 0.98
     """
 
     task_id = 2
@@ -227,21 +243,17 @@ class MediumGrader(BaseGrader):
         breakdown: Dict[str, float] = {}
         notes: List[str] = []
 
-        correct_service = "data-layer"
-        trap_service = "api-gateway"
+        correct_service       = "data-layer"
+        trap_service          = "api-gateway"
         red_herring_alert_svc = "background-worker"
 
-        # Check if any action was taken on correct service
         correct_restart = self._find_action_on_service(action_trajectory, "restart_service", correct_service)
-        correct_scale = self._find_action_on_service(action_trajectory, "scale_service", correct_service)
-        correct_action = correct_restart or correct_scale
-        trap_restart = self._find_action_on_service(action_trajectory, "restart_service", trap_service)
+        correct_scale   = self._find_action_on_service(action_trajectory, "scale_service",   correct_service)
+        correct_action  = correct_restart or correct_scale
+        trap_restart    = self._find_action_on_service(action_trajectory, "restart_service", trap_service)
 
         # ── 1. Root cause identification (+0.35) ─────────────────────────────
-        if correct_action:
-            rc_score = 0.35
-        else:
-            rc_score = 0.0
+        rc_score = 0.35 if correct_action else 0.0
         score += rc_score
         breakdown["root_cause_identification"] = rc_score
         notes.append(f"Root cause (data-layer): {rc_score:.2f}")
@@ -263,7 +275,7 @@ class MediumGrader(BaseGrader):
         # ── 4. Counterfactual used before data-layer action (+0.10) ──────────
         cf_before_action = False
         if correct_action and counterfactual_called:
-            cf_step = next((r.step for r in action_trajectory if r.action_type == "query_counterfactual"), 999)
+            cf_step     = next((r.step for r in action_trajectory if r.action_type == "query_counterfactual"), 999)
             action_step = correct_action.step
             cf_before_action = cf_step < action_step
         cf_score = 0.10 if cf_before_action else 0.0
@@ -274,8 +286,7 @@ class MediumGrader(BaseGrader):
         # ── 5. Speed bonus (+0.10) ────────────────────────────────────────────
         res_step = self._resolution_step(action_trajectory)
         if res_step is not None:
-            speed = self._speed_bonus(res_step, optimal_step=25, max_step=45)
-            speed_score = 0.10 * speed
+            speed_score = 0.10 * self._speed_bonus(res_step, optimal_step=25, max_step=45)
         else:
             speed_score = 0.0
         score += speed_score
@@ -283,14 +294,10 @@ class MediumGrader(BaseGrader):
         notes.append(f"Speed bonus: {speed_score:.2f}")
 
         # ── 6. Partial credit (+0.15) ─────────────────────────────────────────
-        # Correct service identified but suboptimal order (e.g., acted on GW first)
+        # Only when agent found the right service but acted on the trap first.
+        partial = 0.0
         if correct_action and trap_restart and correct_action.step > trap_restart.step:
             partial = 0.15
-        else:
-            partial = 0.0
-        # Ensure we don't double-count with remediation
-        if remediation_score == 0 and correct_action:
-            partial = 0.15  # Identified but slightly wrong sequence
         score += partial
         breakdown["partial_credit"] = partial
         notes.append(f"Partial credit: {partial:.2f}")
@@ -306,8 +313,7 @@ class MediumGrader(BaseGrader):
         if gw_penalty:
             notes.append(f"PENALTY: api-gateway restart(s) (-{gw_penalty:.2f})")
 
-        final_score = round(max(0.01, min(0.99, score)), 4)
-        return GradingResult(score=final_score, breakdown=breakdown, notes=notes)
+        return GradingResult(score=score, breakdown=breakdown, notes=notes)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -324,9 +330,9 @@ class HardGrader(BaseGrader):
     +0.20  Correct root cause (config_drift on origin-service) identified
     +0.20  Correct and complete action sequence executed
     +0.15  Speed bonus: resolution within 40 steps (linear decay to 60)
-    -0.40  Cache restarted (harm — applied even if later corrected)
     +0.10  Partial credit: correct root cause, non-harmful but suboptimal sequence
-    Max: 1.10 (capped to 1.0)
+    -0.40  Cache restarted (applied even if later corrected)
+    Max raw: 1.10 → clamped to 0.98
     """
 
     task_id = 3
@@ -350,12 +356,11 @@ class HardGrader(BaseGrader):
         notes: List[str] = []
 
         correct_service = "origin-service"
-        lethal_service = "cache"
+        lethal_service  = "cache"
 
-        correct_diag = self._find_action_on_service(action_trajectory, "run_diagnostic", correct_service)
+        correct_diag    = self._find_action_on_service(action_trajectory, "run_diagnostic",  correct_service)
         correct_restart = self._find_action_on_service(action_trajectory, "restart_service", correct_service)
-        # "patch config" represented as run_diagnostic with parameters
-        patch_action = next(
+        patch_action    = next(
             (r for r in action_trajectory
              if r.action_type == "run_diagnostic"
              and r.service_id == correct_service
@@ -365,8 +370,10 @@ class HardGrader(BaseGrader):
         cache_restart = self._find_action_on_service(action_trajectory, "restart_service", lethal_service)
 
         # ── 1. Drift detected early (+0.15) ──────────────────────────────────
-        # Proxy: agent took any action before step 19 (threshold breach step)
-        early_actions = [r for r in action_trajectory if r.step < 19 and r.action_type not in ("query_counterfactual", "silence_alert")]
+        early_actions = [
+            r for r in action_trajectory
+            if r.step < 19 and r.action_type not in ("query_counterfactual", "silence_alert")
+        ]
         drift_score = 0.15 if early_actions else 0.0
         score += drift_score
         breakdown["early_drift_detection"] = drift_score
@@ -406,13 +413,17 @@ class HardGrader(BaseGrader):
 
         # ── 5. Correct root cause (+0.20) ─────────────────────────────────────
         acted_on_origin = correct_diag or correct_restart or patch_action
-        rc_score = 0.20 if acted_on_origin else 0.10 if draft_near_correct(action_trajectory) else 0.0
+        if acted_on_origin:
+            rc_score = 0.20
+        elif draft_near_correct(action_trajectory):
+            rc_score = 0.10
+        else:
+            rc_score = 0.0
         score += rc_score
         breakdown["root_cause_identification"] = rc_score
         notes.append(f"Root cause (origin-service): {rc_score:.2f}")
 
         # ── 6. Complete correct sequence (+0.20) ─────────────────────────────
-        # Ideal: silence misleading → cf query → act on origin → declare_resolution
         sequence_complete = (
             rh_silenced
             and counterfactual_called
@@ -428,8 +439,7 @@ class HardGrader(BaseGrader):
         # ── 7. Speed bonus (+0.15) ─────────────────────────────────────────────
         res_step = self._resolution_step(action_trajectory)
         if res_step is not None:
-            speed = self._speed_bonus(res_step, optimal_step=40, max_step=60)
-            speed_score = 0.15 * speed
+            speed_score = 0.15 * self._speed_bonus(res_step, optimal_step=40, max_step=60)
         else:
             speed_score = 0.0
         score += speed_score
@@ -438,10 +448,9 @@ class HardGrader(BaseGrader):
 
         # ── 8. Partial credit (+0.10) ─────────────────────────────────────────
         if acted_on_origin and cache_restart is None and not sequence_complete:
-            partial = 0.10
-            score += partial
-            breakdown["partial_credit"] = partial
-            notes.append(f"Partial credit: {partial:.2f}")
+            score += 0.10
+            breakdown["partial_credit"] = 0.10
+            notes.append("Partial credit: 0.10")
 
         # ── Cache penalty (-0.40) ─────────────────────────────────────────────
         if cache_restart is not None:
@@ -449,8 +458,7 @@ class HardGrader(BaseGrader):
             breakdown["lethal_action_penalty"] = -0.40
             notes.append("SEVERE PENALTY: Cache restarted — write-loss cascade (-0.40)")
 
-        final_score = round(max(0.01, min(0.99, score)), 4)
-        return GradingResult(score=final_score, breakdown=breakdown, notes=notes)
+        return GradingResult(score=score, breakdown=breakdown, notes=notes)
 
 
 def draft_near_correct(trajectory: List[ActionRecord]) -> bool:
