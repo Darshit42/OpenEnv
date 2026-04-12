@@ -147,10 +147,15 @@ def run_episode(task_id: int, seed: int, agent: IsolatedAgent) -> float:
             done = result.get("done", False)
             info = result.get("info", {})
             if done:
-                episode_score = info.get("episode_score", 0.01)
+                raw_score = info.get("episode_score", 0.01)
+                # Ensure strictly between 0 and 1 (exclusive)
+                episode_score = float(max(0.01, min(0.99, raw_score)))
         except Exception as e:
             logger.error(f"Environment step failed: {e}")
             break
+
+    # Safety clamp in case done never fired
+    episode_score = float(max(0.01, min(0.99, episode_score)))
 
     try:
         make_request(f"{ENV_API_URL}/state", method="GET")
@@ -167,20 +172,27 @@ def main() -> None:
     agent = IsolatedAgent()
     task_weights = {1: 0.20, 2: 0.35, 3: 0.45}
     total_weighted_score = 0.0
+    task_scores: dict = {}
     start_time = time.time()
 
     for task_id in [1, 2, 3]:
         logger.info(f"Starting Task {task_id} (seed={random_seed})")
         task_score = run_episode(task_id, random_seed, agent)
-        # Ensure task_score strictly complies with (0, 1) bounds
-        task_score = float(max(0.01, min(0.99, task_score)))
+        # Ensure task_score strictly complies with (0, 1) exclusive bounds
+        task_score = round(float(max(0.01, min(0.99, task_score))), 4)
+        task_scores[task_id] = task_score
         weighted = task_score * task_weights[task_id]
         total_weighted_score += weighted
         logger.info(f"Task {task_id} score: {task_score:.4f} (weighted: {weighted:.4f})")
+        # Emit per-task score so the evaluator can parse individual task scores
+        print(f"[TASK] {json.dumps({'task_id': task_id, 'score': task_score, 'weighted': round(weighted, 4)})}", flush=True)
 
     elapsed = time.time() - start_time
-    final = round(max(0.01, min(0.99, total_weighted_score)), 4)
-    print(f"[END] {json.dumps({'final_score': final, 'elapsed_seconds': round(elapsed, 1), 'seed': random_seed})}", flush=True)
+    final = round(float(max(0.01, min(0.99, total_weighted_score))), 4)
+    print(
+        f"[END] {json.dumps({'final_score': final, 'task_scores': task_scores, 'elapsed_seconds': round(elapsed, 1), 'seed': random_seed})}",
+        flush=True,
+    )
     logger.info(f"All tasks complete. Final score: {final:.4f} in {elapsed:.1f}s")
 
 
