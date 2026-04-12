@@ -205,6 +205,7 @@ class EasyGrader(BaseGrader):
         if db_penalty:
             notes.append("PENALTY: Database restarted (-0.40)")
 
+        score = _safe_clamp(score)
         return GradingResult(score=score, breakdown=breakdown, notes=notes)
 
 
@@ -313,6 +314,7 @@ class MediumGrader(BaseGrader):
         if gw_penalty:
             notes.append(f"PENALTY: api-gateway restart(s) (-{gw_penalty:.2f})")
 
+        score = _safe_clamp(score)
         return GradingResult(score=score, breakdown=breakdown, notes=notes)
 
 
@@ -458,6 +460,7 @@ class HardGrader(BaseGrader):
             breakdown["lethal_action_penalty"] = -0.40
             notes.append("SEVERE PENALTY: Cache restarted — write-loss cascade (-0.40)")
 
+        score = _safe_clamp(score)
         return GradingResult(score=score, breakdown=breakdown, notes=notes)
 
 
