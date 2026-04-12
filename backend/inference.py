@@ -301,7 +301,7 @@ def main() -> None:
 
     task_weights = {1: 0.20, 2: 0.35, 3: 0.45}
     total_weighted_score = 0.0
-    task_scores: Dict[int, float] = {}
+    task_scores: Dict[str, float] = {}
     start_time = time.time()
 
     for task_id in [1, 2, 3]:
@@ -309,7 +309,7 @@ def main() -> None:
         # Double-clamp: run_episode already clamps internally, but we clamp
         # again here to guard against any unexpected return value.
         task_score = _clamp(run_episode(env_or_url, task_id, RANDOM_SEED, USE_LOCAL_ENV))
-        task_scores[task_id] = task_score
+        task_scores[str(task_id)] = task_score
         weighted = task_score * task_weights[task_id]
         total_weighted_score += weighted
         logger.info("Task %d score: %.4f (weighted: %.4f)", task_id, task_score, weighted)
