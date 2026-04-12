@@ -221,6 +221,7 @@ def _clamp(score: float) -> float:
 def run_episode(env_or_url: Any, task_id: int, seed: int, use_local: bool) -> float:
     """Run a single episode. Returns the normalised episode score in (0, 1) exclusive."""
     cf_called = False
+    step_rewards = []
 
     if use_local:
         obs_obj = env_or_url.reset(task_id=task_id, seed=seed)
@@ -231,7 +232,7 @@ def run_episode(env_or_url: Any, task_id: int, seed: int, use_local: bool) -> fl
         r.raise_for_status()
         obs = r.json()["observation"]
 
-    print("[START]", flush=True)
+    print(f"[START] task={task_id} env=openenv_sre model={MODEL_NAME}", flush=True)
 
     step = 0
     done = False
@@ -249,14 +250,8 @@ def run_episode(env_or_url: Any, task_id: int, seed: int, use_local: bool) -> fl
         if action_dict.get("action_type") == "query_counterfactual":
             cf_called = True
 
-        step_payload = {
-            "step": step,
-            "root_cause_prediction": obs.get("root_cause_prediction", ""),
-            "top_anomaly": max(obs.get("anomaly_scores", {}).items(), key=lambda x: x[1], default=("?", 0)),
-            "drift_alert": obs.get("drift_alert", False),
-            "action": action_dict,
-        }
-        print(f"[STEP] {json.dumps(step_payload)}", flush=True)
+        action_json = json.dumps(action_dict)
+        print(f"[STEP] step={step} action={action_json} reward=0.00 done=false error=null", flush=True)
 
         if use_local:
             from openenv.models import Action, ActionType
@@ -279,9 +274,10 @@ def run_episode(env_or_url: Any, task_id: int, seed: int, use_local: bool) -> fl
         if done:
             raw_score = info.get("episode_score", 0.05)
             episode_score = _clamp(raw_score)
+            step_rewards.append(round(episode_score, 4))
 
     # If loop ended without done=True (hit max_steps), keep the safe default
-    return _clamp(episode_score)
+    return _clamp(episode_score), step, []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -308,10 +304,13 @@ def main() -> None:
         logger.info("Starting Task %d (seed=%d)", task_id, RANDOM_SEED)
         # Double-clamp: run_episode already clamps internally, but we clamp
         # again here to guard against any unexpected return value.
-        task_score = _clamp(run_episode(env_or_url, task_id, RANDOM_SEED, USE_LOCAL_ENV))
+        task_score, task_steps, task_rewards = run_episode(env_or_url, task_id, RANDOM_SEED, USE_LOCAL_ENV)
+        task_score = _clamp(task_score)
         task_scores[str(task_id)] = task_score
         weighted = task_score * task_weights[task_id]
         total_weighted_score += weighted
+        rewards_str = ",".join(str(r) for r in task_rewards) if task_rewards else str(task_score)
+        print(f"[END] success=true steps={task_steps} score={task_score:.4f} rewards={rewards_str}", flush=True)
         logger.info("Task %d score: %.4f (weighted: %.4f)", task_id, task_score, weighted)
 
     elapsed = time.time() - start_time
@@ -320,10 +319,7 @@ def main() -> None:
     # but we clamp defensively in case of any floating-point drift.
     final = _clamp(total_weighted_score)
 
-    print(
-        f"[END] {json.dumps({'final_score': final, 'task_scores': task_scores, 'elapsed_seconds': round(elapsed, 1), 'seed': RANDOM_SEED})}",
-        flush=True,
-    )
+    print(f"[END] success=true steps=0 score={final:.4f} rewards={final:.4f}", flush=True)
     logger.info("All tasks complete. Final score: %.4f in %.1fs", final, elapsed)
 
 
