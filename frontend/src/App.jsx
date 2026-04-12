@@ -8,7 +8,7 @@ import ActionPanel from './components/ActionPanel';
 import Leaderboard from './components/Leaderboard';
 import './index.css';
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:7860';
 
 function App() {
   const [state, setState] = useState({
