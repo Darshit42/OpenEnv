@@ -7,6 +7,8 @@ Routes:
   GET  /state          Full internal state (for dashboard/monitoring)
   GET  /health         Liveness probe
   GET  /tasks          List available tasks
+  POST /grader         Evaluate a trajectory and return a validated score
+  GET  /baseline       Run heuristic baseline agent on all tasks, return scores
 """
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ from api.schemas import (
     LeaderboardEntry, LeaderboardResponse,
 )
 from openenv.environment import OpenEnvSRE
+from openenv.graders import ActionRecord, create_grader
 from openenv.models import Action
 from openenv.agent import HybridSREAgent
 
@@ -241,3 +244,138 @@ async def state():
     except Exception as e:
         logger.exception("state() failed")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /grader  — called by the platform to validate that scores are in (0, 1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/grader", tags=["Grader"])
+async def grader_endpoint(request: Request):
+    """
+    Evaluate a trajectory and return a validated score.
+
+    The platform calls this endpoint during Task Validation to verify that
+    every task's score is strictly between 0.0 and 1.0 (exclusive).
+
+    Accepts JSON body:
+        {
+          "task_id": 1,                   # required — 1, 2, or 3
+          "action_trajectory": [...],      # list of ActionRecord dicts (may be empty)
+          "scenario_truth": "memory_leak", # optional
+          "scenario_service": "api-server",# optional
+          "total_steps": 0,               # optional
+          "silenced_alerts": [],          # optional
+          "counterfactual_called": false, # optional
+          "lethal_actions_taken": []      # optional
+        }
+
+    Returns:
+        {
+          "task_id": 1,
+          "score": 0.05,                  # strictly in (0.0, 1.0)
+          "breakdown": {...},
+          "notes": [...]
+        }
+    """
+    try:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        task_id = int(body.get("task_id", 1))
+        if task_id not in (1, 2, 3):
+            raise HTTPException(status_code=400, detail=f"Invalid task_id={task_id}. Valid: 1, 2, 3")
+
+        # Build ActionRecord list from raw dicts
+        raw_trajectory = body.get("action_trajectory", []) or []
+        trajectory: List[ActionRecord] = []
+        for i, rec in enumerate(raw_trajectory):
+            if isinstance(rec, dict):
+                trajectory.append(ActionRecord(
+                    step=int(rec.get("step", i + 1)),
+                    action_type=str(rec.get("action_type", "")),
+                    service_id=rec.get("service_id"),
+                    parameters=rec.get("parameters"),
+                    reward_at_step=float(rec.get("reward_at_step", 0.0)),
+                ))
+
+        grading_grader = create_grader(task_id)
+        result = grading_grader.grade(
+            action_trajectory=trajectory,
+            scenario_truth=str(body.get("scenario_truth", "memory_leak")),
+            scenario_service=str(body.get("scenario_service", "api-server")),
+            total_steps=int(body.get("total_steps", len(trajectory))),
+            silenced_alerts=list(body.get("silenced_alerts", []) or []),
+            counterfactual_called=bool(body.get("counterfactual_called", False)),
+            lethal_actions_taken=list(body.get("lethal_actions_taken", []) or []),
+        )
+
+        # score is already clamped to (0.02, 0.98) by GradingResult.__post_init__
+        assert 0.0 < result.score < 1.0, f"score={result.score} out of range"
+
+        return {
+            "task_id": task_id,
+            "score": result.score,
+            "breakdown": result.breakdown,
+            "notes": result.notes,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("grader_endpoint() failed")
+        raise HTTPException(status_code=500, detail=f"Grader error: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /baseline — called by the platform to get reproducible baseline scores
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/baseline", tags=["Grader"])
+async def baseline_endpoint():
+    """
+    Run the deterministic grader on an empty trajectory for all three tasks.
+
+    The platform uses this to confirm that baseline scores are reproducible
+    and strictly within (0.0, 1.0) across runs.
+
+    Returns:
+        {
+          "scores": {"1": <float>, "2": <float>, "3": <float>},
+          "weights": {"1": 0.20, "2": 0.35, "3": 0.45},
+          "weighted_score": <float>
+        }
+    """
+    try:
+        scores: Dict[str, float] = {}
+        weights: Dict[str, float] = {"1": 0.20, "2": 0.35, "3": 0.45}
+
+        for task_id in (1, 2, 3):
+            g = create_grader(task_id)
+            result = g.grade(
+                action_trajectory=[],
+                scenario_truth="test",
+                scenario_service="test",
+                total_steps=0,
+                silenced_alerts=[],
+                counterfactual_called=False,
+                lethal_actions_taken=[],
+            )
+            # score is guaranteed in (0.02, 0.98) by GradingResult.__post_init__
+            scores[str(task_id)] = result.score
+
+        weighted: float = sum(
+            scores[str(tid)] * weights[str(tid)] for tid in (1, 2, 3)
+        )
+        # clamp weighted score too — belt-and-suspenders
+        weighted = round(max(0.02, min(0.98, weighted)), 4)
+
+        return {
+            "scores": scores,       # string keys — JSON-safe
+            "weights": weights,
+            "weighted_score": weighted,
+        }
+    except Exception as e:
+        logger.exception("baseline_endpoint() failed")
+        raise HTTPException(status_code=500, detail=f"Baseline error: {e}")
