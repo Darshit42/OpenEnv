@@ -335,7 +335,7 @@ class OpenEnvSRE:
             raw_logs=logs,
             metrics=metrics,
             alerts=alerts,
-            anomaly_scores=pipeline_out.get("anomaly_scores", {svc: 0.0 for svc in services}),
+            anomaly_scores=pipeline_out.get("anomaly_scores", {svc: 0.01 for svc in services}),
             anomaly_flags=pipeline_out.get("anomaly_flags", {svc: False for svc in services}),
             causal_dag=self._causal_dag,
             causal_effects=pipeline_out.get("causal_effects", {}),
@@ -447,7 +447,7 @@ class OpenEnvSRE:
             - bd.harm_penalty
         )
         # Clip to reasonable range (harm can drive negative)
-        total = max(-0.99, min(0.99, total))
+        total = max(-0.9999, min(0.9999, total))
 
         return Reward(total=round(total, 4), breakdown=bd)
 
