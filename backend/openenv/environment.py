@@ -399,10 +399,11 @@ class OpenEnvSRE:
         if done:
             max_s = TASK_MAX_STEPS[self._task_id]
             opt_s = TASK_OPTIMAL_STEPS[self._task_id]
+            _EPS = 1e-4
             if self._step_count <= opt_s:
-                speed = 1.0
+                speed = 1.0 - _EPS
             elif self._step_count >= max_s:
-                speed = 0.0
+                speed = _EPS
             else:
                 speed = 1.0 - (self._step_count - opt_s) / (max_s - opt_s)
             bd.speed_bonus = BETA * speed
@@ -446,14 +447,14 @@ class OpenEnvSRE:
             - bd.harm_penalty
         )
         # Clip to reasonable range (harm can drive negative)
-        total = max(-1.0, min(1.0, total))
+        total = max(-0.99, min(0.99, total))
 
         return Reward(total=round(total, 4), breakdown=bd)
 
     def _grade_episode(self) -> GradingResult:
         """Run the deterministic task grader on the completed action trajectory."""
         grader = create_grader(self._task_id)
-        return grader.grade(
+        result = grader.grade(
             action_trajectory=self._action_trajectory,
             scenario_truth=self._scenario.ground_truth_root_cause,
             scenario_service=self._scenario.ground_truth_service,
@@ -462,3 +463,6 @@ class OpenEnvSRE:
             counterfactual_called=self._counterfactual_called,
             lethal_actions_taken=self._lethal_actions,
         )
+        # Belt-and-suspenders: ensure score is strictly open even if grader is misconfigured
+        result.score = max(0.02, min(0.98, result.score))
+        return result

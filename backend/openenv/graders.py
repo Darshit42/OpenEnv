@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+EPS = 1e-4  # Small epsilon — keeps ranking intact, avoids boundary values
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Data containers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -73,11 +75,11 @@ class BaseGrader:
 
     @staticmethod
     def _speed_bonus(step: int, optimal_step: int, max_step: int) -> float:
-        """Linear decay from 1.0 at optimal_step to 0.0 at max_step."""
+        """Linear decay from ~1.0 at optimal_step to ~0.0 at max_step. Never returns exact 0 or 1."""
         if step <= optimal_step:
-            return 1.0
+            return 1.0 - EPS
         if step >= max_step:
-            return 0.0
+            return EPS
         return 1.0 - (step - optimal_step) / (max_step - optimal_step)
 
     @staticmethod

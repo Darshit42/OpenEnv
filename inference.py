@@ -28,7 +28,7 @@ def make_request(url: str, method: str = "GET", payload: dict = None) -> dict:
     data = None
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
-    
+
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
@@ -64,7 +64,7 @@ class IsolatedAgent:
                     "3. query_counterfactual prior to restart_service.\n"
                     "4. If cf_result.harm_flag is true, do not restart it."
                 )
-                
+
                 resp = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=[
@@ -76,9 +76,9 @@ class IsolatedAgent:
                 raw = resp.choices[0].message.content.strip()
                 if raw.startswith("```"):
                     raw = raw.split("```")[1]
-                    if raw.startswith("json"):
-                        raw = raw[4:]
-                
+                if raw.startswith("json"):
+                    raw = raw[4:]
+
                 action_dict = json.loads(raw)
                 if "reasoning" not in action_dict:
                     action_dict["reasoning"] = "LLM decided."
@@ -90,14 +90,14 @@ class IsolatedAgent:
         services = obs.get("services", [])
         anomaly_scores = obs.get("anomaly_scores", {})
         target = max(services, key=lambda s: anomaly_scores.get(s, 0)) if services else None
-        
+
         if step >= 20:
             return {"action_type": "declare_resolution", "service_id": None, "parameters": None, "reasoning": "Timeout fallback"}
         if not cf_called and target:
             return {"action_type": "query_counterfactual", "service_id": target, "parameters": None, "reasoning": "Fallback cf"}
         if target:
             return {"action_type": "restart_service", "service_id": target, "parameters": None, "reasoning": "Fallback restart"}
-            
+
         return {"action_type": "declare_resolution", "service_id": None, "parameters": None, "reasoning": "Default resolution"}
 
 
